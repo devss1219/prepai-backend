@@ -52,7 +52,27 @@ def upload():
                 "error": "Could not extract text from PDF. Make sure it is not a scanned image."
             }), 400
 
-        # Step 2: Groq AI Analysis
+        # Step 2: Validate it is actually a resume
+        resume_keywords = [
+            "experience", "education", "skills", "work history", "employment",
+            "university", "college", "degree", "bachelor", "master", "b.tech",
+            "m.tech", "b.sc", "m.sc", "mba", "bca", "mca", "internship",
+            "projects", "certifications", "objective", "summary", "profile",
+            "achievements", "responsibilities", "engineer", "developer",
+            "linkedin", "github", "portfolio", "gpa", "cgpa", "languages",
+            "volunteer", "publications", "references", "hobbies", "interests",
+            "phone", "email", "address", "contact", "designation", "position"
+        ]
+        text_lower = resume_text.lower()
+        matched = sum(1 for kw in resume_keywords if kw in text_lower)
+
+        if matched < 2:
+            return jsonify({
+                "error": "This does not appear to be a resume. Please upload a valid resume PDF."
+            }), 400
+
+        print(f"Resume validation passed ({matched} keywords matched)")
+
         prompt = f"""You are a STRICT ATS Resume Analyser and Career Coach with 20 years of experience. You do NOT give inflated scores. Be brutally honest and critical.
 
 Analyse the resume and return ONLY raw JSON - no markdown, no code blocks, no explanation.
