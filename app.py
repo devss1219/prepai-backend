@@ -139,6 +139,135 @@ Return ONLY the JSON object."""
         return jsonify({"error": "AI analysis failed. Try again.", "detail": str(e)}), 500
 
 
+@app.route("/generate-resume", methods=["POST"])
+def generate_resume():
+    if "resume" not in request.files:
+        return jsonify({"error": "No file uploaded"}), 400
+
+    file = request.files["resume"]
+
+    if not file.filename.lower().endswith(".pdf"):
+        return jsonify({"error": "Only PDF files are allowed"}), 400
+
+    try:
+        # Step 1: Extract text using pdfplumber
+        pdf_bytes = BytesIO(file.read())
+        resume_text = ""
+        with pdfplumber.open(pdf_bytes) as pdf:
+            for page in pdf.pages:
+                text = page.extract_text()
+                if text:
+                    resume_text += text + "\n"
+
+        resume_text = resume_text.strip()
+        print(f"[generate-resume] Extracted text length: {len(resume_text)}")
+
+        if len(resume_text) < 50:
+            return jsonify({
+                "error": "Could not extract text from PDF. Make sure it is not a scanned image."
+            }), 400
+
+        # Step 2: AI generates structured resume JSON with improvements applied
+        prompt = f"""You are an expert Resume Writer and Career Coach. Extract all information from the resume below and return it as structured JSON. Also IMPROVE the content — rewrite the summary to be stronger, add action verbs and metrics to experience bullet points where possible, and ensure skills are well-organized.
+
+Resume:
+---
+{resume_text[:6000]}
+---
+
+Return ONLY this exact JSON structure with real data from the resume (no markdown, no code blocks, no explanation):
+{{
+  "name": "Full Name",
+  "role": "Current/Target Job Title",
+  "email": "email@example.com",
+  "phone": "+91 9876543210",
+  "location": "City, Country",
+  "github": "github.com/username",
+  "linkedin": "linkedin.com/in/username",
+  "portfolio": "portfolio-url.com",
+  "summary": "A strong 2-3 sentence professional summary with keywords and value proposition. Rewrite this to be impactful.",
+  "skills": ["Skill 1", "Skill 2", "Skill 3"],
+  "experience": [
+    {{
+      "company": "Company Name",
+      "role": "Job Title",
+      "duration": "Month Year - Month Year",
+      "points": [
+        "Improved bullet point with action verb and metric",
+        "Another strong bullet point"
+      ]
+    }}
+  ],
+  "education": [
+    {{
+      "degree": "Degree Name",
+      "school": "University/College Name",
+      "duration": "Year - Year",
+      "grade": "CGPA/Percentage if mentioned"
+    }}
+  ],
+  "projects": [
+    {{
+      "name": "Project Name",
+      "description": "One line description",
+      "tech": ["Tech1", "Tech2"],
+      "points": [
+        "What you built and its impact"
+      ],
+      "link": "github or live link if mentioned"
+    }}
+  ],
+  "certifications": ["Certification 1", "Certification 2"],
+  "languages": ["Language 1", "Language 2"]
+}}
+
+Rules:
+- If a field is not found in the resume, use empty string "" or empty array []
+- For github/linkedin/portfolio: extract just the URL path, not full https:// unless it's there
+- IMPROVE all bullet points — add strong action verbs (Led, Built, Optimised, Reduced, Increased, etc.)
+- REWRITE the summary to be professional and ATS-friendly
+- Keep all factual information accurate — only improve the language
+- Return ONLY the JSON object"""
+
+        chat_completion = client.chat.completions.create(
+            messages=[
+                {
+                    "role": "system",
+                    "content": "You are an expert Resume Writer. You only respond with raw JSON, no markdown, no extra text."
+                },
+                {
+                    "role": "user",
+                    "content": prompt
+                }
+            ],
+            model="llama-3.3-70b-versatile",
+            temperature=0.4,
+            max_tokens=2048,
+        )
+
+        raw_text = chat_completion.choices[0].message.content.strip()
+        print(f"[generate-resume] Groq raw (first 300): {raw_text[:300]}")
+
+        # Strip markdown fences if present
+        raw_text = re.sub(r'^```[\w]*\n?', '', raw_text)
+        raw_text = re.sub(r'\n?```$', '', raw_text).strip()
+
+        resume_data = json.loads(raw_text)
+
+        return jsonify({
+            "success": True,
+            "fileName": file.filename,
+            "resumeData": resume_data
+        })
+
+    except json.JSONDecodeError as e:
+        print(f"[generate-resume] JSON parse error: {e}")
+        return jsonify({"error": "AI returned invalid response. Try again.", "detail": str(e)}), 500
+    except Exception as e:
+        print(f"[generate-resume] Error: {str(e)}")
+        return jsonify({"error": "Resume generation failed. Try again.", "detail": str(e)}), 500
+
+
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     debug = os.getenv("FLASK_DEBUG", "false").lower() == "true"
