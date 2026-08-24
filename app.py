@@ -110,7 +110,7 @@ Return ONLY the JSON object."""
                     "content": prompt
                 }
             ],
-            model="llama-3.1-70b-versatile",  # <--- YAHAN CHANGE KIYA HAI
+            model="openai/gpt-oss-120b",  # <--- Use the new GPT-OSS model here
             temperature=0.3,
             max_tokens=1024,
         )
