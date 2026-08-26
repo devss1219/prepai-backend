@@ -53,47 +53,76 @@ def upload():
             }), 400
 
         # Step 2: Validate it is actually a resume
-        resume_keywords = [
-            "experience", "education", "skills", "work history", "employment",
+        core_resume_keywords = [
+            "experience", "education", "skills", "employment", "work history", 
+            "projects", "certifications", "achievements", "summary", "objective", "profile"
+        ]
+        general_keywords = [
             "university", "college", "degree", "bachelor", "master", "b.tech",
             "m.tech", "b.sc", "m.sc", "mba", "bca", "mca", "internship",
-            "projects", "certifications", "objective", "summary", "profile",
-            "achievements", "responsibilities", "engineer", "developer",
-            "linkedin", "github", "portfolio", "gpa", "cgpa", "languages",
-            "volunteer", "publications", "references", "hobbies", "interests",
-            "phone", "email", "address", "contact", "designation", "position"
+            "responsibilities", "engineer", "developer", "linkedin", "github", 
+            "portfolio", "gpa", "cgpa", "languages", "volunteer", "publications", 
+            "references", "hobbies", "interests", "designation", "position"
         ]
+        
         text_lower = resume_text.lower()
-        matched = sum(1 for kw in resume_keywords if kw in text_lower)
+        core_matched = sum(1 for kw in core_resume_keywords if kw in text_lower)
+        general_matched = sum(1 for kw in general_keywords if kw in text_lower)
+        total_matched = core_matched + general_matched
 
-        if matched < 2:
+        # A real resume should have at least 2 core sections (like experience & education) 
+        # or a high number of general resume-related keywords.
+        if core_matched < 2 and total_matched < 5:
             return jsonify({
-                "error": "This does not appear to be a resume. Please upload a valid resume PDF."
+                "error": f"This document does not appear to be a resume (only found {total_matched} resume keywords). Please upload a valid resume PDF."
             }), 400
 
-        print(f"Resume validation passed ({matched} keywords matched)")
+        print(f"Resume validation passed (Core: {core_matched}, Total: {total_matched} keywords matched)")
 
-        prompt = f"""You are a STRICT ATS Resume Analyser and Career Coach with 20 years of experience. You do NOT give inflated scores. Be brutally honest and critical.
+        # Step 3: Extract JD text from file (if provided)
+        jd_file = request.files.get("jdFile")
+        jd_file_text = ""
+        if jd_file and jd_file.filename.lower().endswith(".pdf"):
+            jd_pdf_bytes = BytesIO(jd_file.read())
+            with pdfplumber.open(jd_pdf_bytes) as pdf:
+                for page in pdf.pages:
+                    text = page.extract_text()
+                    if text:
+                        jd_file_text += text + "\n"
+
+        jd_text = request.form.get("jd", "").strip()
+        combined_jd_text = f"{jd_file_text}\n{jd_text}".strip()
+
+        jd_section = f"\nJob Description (JD):\n---\n{combined_jd_text}\n---\n" if combined_jd_text else ""
+        jd_instruction = (
+            "Analyze the resume strictly against the provided Job Description. The atsScore, missingKeywords, and improvements should heavily reflect the alignment with the JD requirements."
+            if combined_jd_text else
+            "Analyze the resume for general ATS compatibility."
+        )
+
+        prompt = f"""You are an Expert ATS Resume Analyser and Career Coach. You evaluate resumes fairly, constructively, and realistically based on industry standards.
 
 Analyse the resume and return ONLY raw JSON - no markdown, no code blocks, no explanation.
 
+{jd_instruction}
+{jd_section}
 Resume:
 ---
 {resume_text[:6000]}
 ---
 
-Scoring rules (be STRICT - average resumes should score 40-60, only exceptional ones above 80):
-- overallScore: 0-100 (harsh overall quality score)
-- atsScore: 0-100 (ATS compatibility - penalise heavily for missing keywords, poor formatting, no quantified achievements)
+Scoring rules (Evaluate realistically and use the full 0-100 scale based on actual merit. Do not be overly harsh on junior/student resumes):
+- overallScore: 0-100 (Overall quality score)
+- atsScore: 0-100 (ATS compatibility - deduct for missing keywords from JD, poor formatting, or lack of quantified achievements)
 - sections.contactInfo: 0-10 (deduct if LinkedIn/GitHub/portfolio missing)
 - sections.summary: 0-10 (deduct if generic, vague, or missing)
-- sections.experience: 0-30 (deduct heavily if no metrics/numbers, vague descriptions, short tenures)
-- sections.skills: 0-20 (deduct if outdated, too generic, or not matched to experience)
+- sections.experience: 0-30 (deduct if no metrics/numbers, vague descriptions, short tenures, or lack of JD alignment)
+- sections.skills: 0-20 (deduct if outdated, too generic, or missing skills required by the JD)
 - sections.education: 0-20
 - sections.formatting: 0-10 (deduct for poor structure, long paragraphs, inconsistent formatting)
 
-Return exactly this JSON:
-{{"overallScore":55,"atsScore":48,"sections":{{"contactInfo":7,"summary":5,"experience":18,"skills":12,"education":16,"formatting":7}},"strengths":["very specific strength from the actual resume","another specific strength","third specific strength"],"improvements":["specific actionable improvement with example","another critical improvement needed","third critical fix","fourth important enhancement"],"keywords":["actual keyword from resume 1","actual keyword 2","actual keyword 3","actual keyword 4","actual keyword 5"],"missingKeywords":["important missing keyword 1","missing keyword 2","missing keyword 3","missing keyword 4"],"suitableRoles":["Job Role 1","Job Role 2","Job Role 3","Job Role 4","Job Role 5"],"verdict":"One brutally honest sentence about this resume's current market standing."}}
+Return exactly this JSON structure (DO NOT copy the example scores, calculate your own realistic scores!):
+{{"overallScore":78,"atsScore":82,"sections":{{"contactInfo":9,"summary":8,"experience":24,"skills":16,"education":15,"formatting":6}},"strengths":["very specific strength from the actual resume","another specific strength","third specific strength"],"improvements":["specific actionable improvement with example","another critical improvement needed","third critical fix","fourth important enhancement"],"keywords":["actual keyword from resume 1","actual keyword 2","actual keyword 3","actual keyword 4","actual keyword 5"],"missingKeywords":["important missing keyword 1","missing keyword 2","missing keyword 3","missing keyword 4"],"suitableRoles":["Job Role 1","Job Role 2","Job Role 3","Job Role 4","Job Role 5"],"verdict":"One brutally honest sentence about this resume's current market standing."}}
 
 For suitableRoles: list 5 specific job titles this resume is genuinely qualified for RIGHT NOW based on actual experience and skills shown. Be realistic, not aspirational.
 
@@ -110,9 +139,10 @@ Return ONLY the JSON object."""
                     "content": prompt
                 }
             ],
-            model="openai/gpt-oss-120b",  # <--- Use the new GPT-OSS model here
+            model="openai/gpt-oss-120b",
             temperature=0.3,
-            max_tokens=1024,
+            max_tokens=4096,
+            response_format={"type": "json_object"},
         )
 
         raw_text = chat_completion.choices[0].message.content.strip()
